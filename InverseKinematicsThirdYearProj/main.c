@@ -95,7 +95,7 @@ float dotProduct(float * a,float * b,short int length,short int incOnB){
 void multiMat(t_matrix * destMat,t_matrix* matA,t_matrix *matB) {
 	//multiplies matrix a by b and returns the result
 	if (matA->columns != matB->rows) {
-		printf("Cannot multiply, incorrect size");
+		//printf("Cannot multiply, incorrect size");
 		errorIdler();
 	}
 	short int rows= matA->rows, cols= matB->columns;
@@ -134,6 +134,54 @@ void multiMatScalarAccumulative(t_matrix* matrixOut, t_matrix* matrixIn, float s
 		}
 	}
 
+}
+
+float det2x2(t_matrix* matIn, short int avoidRow, short int avoidCol) {
+//does a 2x2 subsection of a 3x3 matrix
+	checkSize(matIn, 3, 3, "for determinant");
+	float sum=0;
+	int curIndex = 0;
+	for (short int y = 0; y < 3; y++) {
+		if (y != avoidRow) {
+			for (short int x = 0; x < 3; x++) {
+				if (x != avoidCol) {
+					sum += matIn->pData[pos3(y, x)] * ((0b11 ^ curIndex) ?  -1: 1);//becomes ind:val= 0:1 1:-1 2:-1 3:1
+					curIndex++;
+				}
+			}
+		}
+	}
+	return(sum);
+}
+
+t_matrix adjoint(t_matrix* matIn) {
+	checkSize(matIn, 3, 3, "mat for adjoint");
+	t_matrix adjMat=createMatrix(3, 3);
+	short signed int sign = 1;
+	for (short int y = 0; y < matIn->rows; y++) {
+		for (short int x = 0; x < matIn->columns; x++) {
+			adjMat.pData[pos3(y,x)]=det2x2(matIn, y, x)*sign;
+			sign *= -1;
+			//add the determinant of all elements in other rows and flip the sign
+		}
+	}
+	return(adjMat);
+}
+
+
+t_matrix dupeMat(t_matrix* matIn) {
+	t_matrix matOut = createMatrix(matIn->rows, matIn->columns);
+	memcpy(matOut.pData, matIn->pData, matIn->columns * matIn->rows * fsize);
+	return(matOut);
+}
+
+void transpose(t_matrix* matOut, t_matrix* matIn) {
+	checkSize(matOut, matIn->columns, matIn->rows, "transpose");
+	for (short int y = 0; y < matIn->rows; y++) {
+		for (short int x = 0; x < matIn->columns; x++) {
+			matOut->pData[y + (matIn->columns * x)] = matIn->pData[x + (matIn->columns * y)];
+		}
+	}
 }
 
 void insertRotMat(t_matrix* tfMat, t_matrix* rotMat) {
@@ -242,11 +290,7 @@ void roundNearZeroToZero(t_matrix* pMat) {
 void rotMatrixExp(t_matrix* rotOut, t_matrix* so3RotIn) {
 	checkSize(rotOut, 3, 3, "Exponential rotation");
 	checkSize(rotOut, 3, 3, "so3 rotation");
-	//if (normalise(so3RotIn->pData,9) < threshold) {
-	//	//if the rotation matrix is negligable avoid a divide by zero
-	//	setToIdentity(rotOut);
-	//}
-	//else {
+	
 		float angleVector[3];
 		so3ToVec(angleVector, so3RotIn);
 		float angleAboutUnit = axisAng3(NULL, angleVector);
@@ -262,7 +306,7 @@ void rotMatrixExp(t_matrix* rotOut, t_matrix* so3RotIn) {
 
 		multiMat(&unitRotMat, &unitRotMat, &unitRotMat);
 		multiMatScalarAccumulative(rotOut, &unitRotMat, 1 - cosf(angleAboutUnit));
-	//}
+	
 }
 
 void tfMatrixExp(t_matrix* Tse3out, t_matrix* se3PosIn) {
@@ -271,7 +315,7 @@ void tfMatrixExp(t_matrix* Tse3out, t_matrix* se3PosIn) {
 	float posToTF[3];
 	t_matrix posRot = createMatrix(3, 3);
 	extractRotMat(&posRot, se3PosIn);
-	printMatrix(&posRot, "Rotation matrix");
+	//printMatrix(&posRot, "Rotation matrix");
 	if (normalise(posRot.pData, 9) < 0.000001) {
 		setToIdentity(Tse3out);//avoids divide by zero errors by just setting it to a identity matrix
 		Tse3out->pData[pos4(0, 3)] = se3PosIn->pData[pos4(0, 3)];
@@ -282,22 +326,22 @@ void tfMatrixExp(t_matrix* Tse3out, t_matrix* se3PosIn) {
 	else {
 		//extract the rotation matrix from the transformation matrix coming in
 		so3ToVec(posToTF, &posRot);
-		printf("posToTf is %f, %f, %f \r\n", posToTF[0], posToTF[1], posToTF[2]);
+		//printf("posToTf is %f, %f, %f \r\n", posToTF[0], posToTF[1], posToTF[2]);
 		//get the magnitude of rotation about those three axis
 		float curRotAngle = axisAng3(NULL, posToTF);
-		printf("cur rot angle (theta) is %E \r\n", curRotAngle);
+		//printf("cur rot angle (theta) is %E \r\n", curRotAngle);
 
 		t_matrix unitRotAxis = createMatrix(3, 3);
 
 		multiMatScalar(&unitRotAxis, &posRot, 1 / curRotAngle);
-		printMatrix(&unitRotAxis, "Unit rotation matrix");
+		//printMatrix(&unitRotAxis, "Unit rotation matrix");
 		//divide the rotation matrix by that angle to get a unit rotation matrix
 
 			//convert rotation to exponential form and insert
 		t_matrix expoRot = createMatrix(3, 3);
 		rotMatrixExp(&expoRot, &posRot);
 		insertRotMat(Tse3out, &expoRot);
-		printMatrix(&expoRot, "exponential rotation matrix");
+		//printMatrix(&expoRot, "exponential rotation matrix");
 		t_matrix accumulatorMat = createMatrix(3, 3);
 
 		//create identity matrix times the angle of rotation and put it into a tempoary matrix
@@ -322,14 +366,14 @@ void tfMatrixExp(t_matrix* Tse3out, t_matrix* se3PosIn) {
 		multiMat(&xyzVec, &accumulatorMat, &xyzVec);
 		multiMatScalar(&xyzVec, &xyzVec, (1.0f / curRotAngle));
 
-		printMatrix(&xyzVec, "xyz vector");
+		//printMatrix(&xyzVec, "xyz vector");
 		insertXYZtoTF(Tse3out, xyzVec.pData);
 		
 		Tse3out->pData[15] = 1;
 		freeMat(&expoRot);
 		freeMat(&accumulatorMat);
 		freeMat(&unitRotAxis);
-		printMatrix(Tse3out, "TseOut");
+		//printMatrix(Tse3out, "TseOut");
 		//garbage collection
 	}
 	freeMat(&posRot);
@@ -346,19 +390,19 @@ void FKinSpace(t_matrix * toolPos,t_matrix* pHomeTF, t_matrix * Slist, float* th
 	t_matrix SscaledToTheta = createMatrix(Slist[0].rows, Slist[0].columns);
 	t_matrix expJointTf = createMatrix(4, 4);
 	for(signed int i = numThetas-1; i >= 0; i--) {
-		printf("\r\n i=%u\r\n", i);
-		printMatrix(&expT, "T");
+		//printf("\r\n i=%u\r\n", i);
+		//printMatrix(&expT, "T");
 
 		//working from last joint (end effector) to first (nearest base)
 		multiMatScalar(&SscaledToTheta,&Slist[i],thetaList[i]);
-		printf("theta is %f\r\n", thetaList[i]);
-		printMatrix(&Slist[i], "Screw axis");
-		printMatrix(&SscaledToTheta, "Screw axis scaled");
+		//printf("theta is %f\r\n", thetaList[i]);
+		//printMatrix(&Slist[i], "Screw axis");
+		//printMatrix(&SscaledToTheta, "Screw axis scaled");
 
 		vecToSE3(&screwAxisInExp, SscaledToTheta.pData);
-		printMatrix(&screwAxisInExp, "Screw axis in exp");
+		//printMatrix(&screwAxisInExp, "Screw axis in exp");
 		tfMatrixExp(&expJointTf, &screwAxisInExp);
-		printMatrix(&expJointTf, "joint tf exponential");
+		//printMatrix(&expJointTf, "joint tf exponential");
 		multiMat( & expT, & expJointTf, & expT);
 
 
@@ -374,6 +418,40 @@ void FKinSpace(t_matrix * toolPos,t_matrix* pHomeTF, t_matrix * Slist, float* th
 	
 }
 
+void fastTFinverse(t_matrix * matOut, t_matrix* matIn) {
+
+	//utilises tf format to take the inverse faster
+	checkSize(matOut, 4, 4, "transfer function inverse");
+	checkSize(matIn, 4, 4, "transfer function to be inverted");
+	memset(matOut->pData, 0, fsize * 16);
+	t_matrix rotMat = createMatrix(3, 3);
+	extractRotMat(&rotMat, matIn);
+	
+	t_matrix rotMatTranspose = createMatrix(3, 3);
+	transpose(&rotMatTranspose,&rotMat);
+	freeMat(&rotMat);
+	insertRotMat(matOut,&rotMatTranspose);
+	multiMatScalar(&rotMatTranspose, &rotMatTranspose, -1);
+	t_matrix xyzVec=createMatrix(3,1);
+	extractXYZfromTF(xyzVec.pData, matIn);
+	multiMat(&xyzVec,&rotMatTranspose,&xyzVec);
+	insertXYZtoTF(matOut, &xyzVec);
+	matOut->pData[15] = 1;
+	freeMat(&rotMatTranspose);
+
+}
+
+t_matrix IKinSpace(t_matrix* desiredTF,t_matrix * Slist, t_matrix* homeTF,t_matrix * initAngles,short int numAngles,float linError,float rotError) {
+	t_matrix prevJointAngles = dupeMat(initAngles);
+	t_matrix vS;
+	short int iterations = 0;
+	do {
+
+
+		iterations++;
+	} while ((normalise(vS.pData,3))>rotError || normalise(vS.pData+(fsize*3),3)>linError);
+
+}
 
 int main(char* args) {
 
