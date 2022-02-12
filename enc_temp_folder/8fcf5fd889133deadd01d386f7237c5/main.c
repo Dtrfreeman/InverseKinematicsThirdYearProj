@@ -490,6 +490,7 @@ void adjoint(t_matrix* matOut, t_matrix* matIn) {
 float traceDiag(t_matrix * mat) {
 	//sum of diagonal elements
 	short int len = mat->columns;
+	if (len > mat->rows) { len = mat->rows; }
 	float sum = 0;
 	if (mat->rows < len) { len = mat->rows; }
 	for (short int i = 0; i < len; i++) {
