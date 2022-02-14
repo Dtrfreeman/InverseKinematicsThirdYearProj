@@ -240,11 +240,9 @@ align x and y trim the position of the source matrix within the destination that
 */
 void copyDiffSizeMatToMat(t_matrix* dest, t_matrix* src,short int alignY,short int alignX) {
 	//assumes destination is always large enough to fit source
-	short int curRow = 0;
-	for (short int i = 0; i < src->columns * src->rows; i++)
-	{
-		curRow = i % src->columns;
-		dest->pData[(curRow * dest->columns + alignY) + alignX] = src->pData[i];
+	short int curRow = 0,curCol=0;
+	for (short int y = 0; y < src->rows; y++) {
+		memcpy(&(dest->pData[(alignX + (dest->columns * (alignY + y)))]), &(src->pData[y* src->columns]), fsize * src->columns);
 	}
 
 }
@@ -322,7 +320,7 @@ void vecToSE3(t_matrix* se3Out,float * pVec) {
 }
 
 void se3ToVec(float* pVec, t_matrix* se3In) {
-	printMatrix(se3In, "se3in");
+	//printMatrix(se3In, "se3in");
 	//gets 6 element velocity vector from se3
 	checkSize(se3In, 4, 4, "se3 mat to have vector found");
 	pVec[0] = se3In->pData[(2 * se3In->columns)+1];
@@ -466,6 +464,7 @@ void adjoint(t_matrix* matOut, t_matrix* matIn) {
 	//puts a se3 transformation into a 6x6 adjoint representation
 	checkSize(matIn, 4, 4, "to have adjoint found");
 	checkSize(matOut, 6, 6, "adjoint output");
+	//printMatrix(matIn, "mat to be made adjoint");
 	memset(matOut->pData, 0, 6 * 6 * fsize);
 	t_matrix rotMat = createMatrix(3, 3);
 	extractRotMat(&rotMat, matIn);
@@ -541,6 +540,7 @@ void tfMatrixLog(t_matrix* se3PosOut, t_matrix* Tse3in) {
 		return;
 	}
 	
+	//printMatrix(&posRotLog, "rot mat for angle");
 
 	float rotAngle = acosf((traceDiag(&posRotLog) - 1) / 2);
 
@@ -570,12 +570,12 @@ void FKinSpace(t_matrix * toolPos,t_matrix* pHomeTF, t_matrix * Slist, t_matrix 
 	t_matrix SscaledToTheta = createMatrix(Slist[0].rows, Slist[0].columns);
 	t_matrix expJointTf = createMatrix(4, 4);
 	for(signed int i = numThetas-1; i >= 0; i--) {
-		printf("\r\n i=%u\r\n", i);
+		//printf("\r\n i=%u\r\n", i);
 		//printMatrix(&expT, "T");
 
 		//working from last joint (end effector) to first (nearest base)
 		multiMatScalar(&SscaledToTheta,&Slist[i],thetaList->pData[i]);
-		printf("theta is %f\r\n", thetaList->pData[i]);
+		//printf("theta is %f\r\n", thetaList->pData[i]);
 		//printMatrix(&Slist[i], "Screw axis");
 		//printMatrix(&SscaledToTheta, "Screw axis scaled");
 
@@ -630,25 +630,34 @@ void jacobianSpace(t_matrix* jacOut, t_matrix* Slist, float* angleLst) {
 	t_matrix jacSingleRow = createMatrix(1, 6);
 	//makes addresssing way easier
 	for(short int i=0;i<6;i++){
-		memcpy(jacTransposed.pData, Slist[i].pData, fsize * 6);
+		memcpy(&jacTransposed.pData[6 * i], Slist[i].pData, fsize * 6);
 	}
+	////printMatrix(&jacTransposed, "jac transposed");
 	t_matrix Tmat = createMatrix(4, 4);
 	t_matrix workingMatrix = createMatrix(4, 4);
 	t_matrix adjTmat = createMatrix(6, 6);
 	t_matrix workingTwistMat = createMatrix(6, 1);
 	t_matrix jointPos = createMatrix(4, 4);
 	setToIdentity(&Tmat);
-	for (short int i = 0; i < 6-1; i++) {
-		multiMatScalar(&workingTwistMat, &Slist[i], (angleLst[i]));
-		vecToSE3(&workingMatrix, &workingTwistMat);
+	for (short int i = 0; i < 5; i++) {
+		//printf("jacobian I=%u", i);
+		//printMatrix(&(Slist[i]), "Slist vals");
+		multiMatScalar(&workingTwistMat, &(Slist[i]), (angleLst[i]));
+		//printMatrix(&workingTwistMat, "current twist matrix");
+		vecToSE3(&workingMatrix, workingTwistMat.pData);
+		//printMatrix(&workingMatrix, "se3 rep of sList[i]*angleList[i]");
 		tfMatrixExp(&jointPos,&workingMatrix);
+		//printMatrix(&jointPos, "expo output joint position in jacobian");
 		multiMat(&Tmat, &Tmat, &jointPos);
+		//printMatrix(&Tmat, "T");
 		adjoint(&adjTmat, &Tmat);
-		multiMat(&jacSingleRow, &adjTmat, &Slist[i]);
-		memcpy(&jacTransposed, &jacSingleRow, 6 * fsize);
+		multiMat(&jacSingleRow, &adjTmat, &Slist[i+1]);
+		memcpy(&(jacTransposed.pData[6*i]), jacSingleRow.pData, 6 * fsize);
 		
 	}
-	transpose(&jacOut, &jacTransposed);
+	//printf("finished finding jacobian");
+	//printMatrix(&Tmat, "T");
+	transpose(jacOut, &jacTransposed);
 	freeMat(jacTransposed);
 	freeMat(Tmat);
 	freeMat(workingMatrix);
@@ -676,11 +685,11 @@ void inverseOfMat(t_matrix* matOut, t_matrix* matIn) {
 
 void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t_matrix* homeTF,t_matrix * initAngles,float linError,float rotError) {
 	//only works for 6 jointed robots
-	printMatrix(initAngles, "recieved initial angles");
+	//printMatrix(initAngles, "recieved initial angles");
 	t_matrix angleMat = createMatrix(6, 1);
 	memcpy(angleMat.pData, initAngles->pData, fsize * 6);
 	t_matrix tsb = createMatrix(4, 4);
-	printMatrix(initAngles, "copied initial angles");
+	//printMatrix(initAngles, "copied initial angles");
 	/*
 	* Vs=Adjoint(forwardKin(homeTF))xse3of(matLog(Inv(forwardKin(homeTF))*desiredPos)
 	*/
@@ -691,43 +700,46 @@ void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t
 	t_matrix invOfJaco = createMatrix(6, 6);
 	t_matrix matLogOfInvTF = createMatrix(4, 4);
 	FKinSpace(&tsb, homeTF, Slist, &angleMat, 6);
-	printMatrix(&tsb, "working forward transform");
+	//printMatrix(&tsb, "working forward transform");
 	//get current forward kinematic space frame transform
 	adjoint(&adjtsb, &tsb);
-	printMatrix(&adjtsb, "adjoint of cur forward kin tf");
+	//printMatrix(&adjtsb, "adjoint of cur forward kin tf");
 
 	fastTFinverse(&workingMat, &tsb);
-	printMatrix(&workingMat, "IK tf inverse");
+	//printMatrix(&workingMat, "IK tf inverse");
+	multiMat(&workingMat,&workingMat, desiredTF);
 	tfMatrixLog(&matLogOfInvTF, &workingMat);
-	printMatrix(&matLogOfInvTF, "log of forward tf inverse");
-	multiMat(&workingMat, &matLogOfInvTF, desiredTF);
-	se3ToVec(vS.pData, &workingMat);
-	printMatrix(&vS, "Vector of prev");
-	multiMat(&vS, &adjtsb, &vS);
-	printMatrix(&vS, "vS");
-	short int iterations = 0;
+	//printMatrix(&matLogOfInvTF, "log of forward tf inverse");
 	
+	se3ToVec(vS.pData, &matLogOfInvTF);
+	//printMatrix(&vS, "Vector of prev");
+	multiMat(&vS, &adjtsb, &vS);
+	//printMatrix(&vS, "vS");
+	short int iterations = 0;
+	t_matrix angleDeltaMat = createMatrix(6, 1);
+#define maxIterations 20
 	//newton raphsen method
 	//conveniently as ive chosen to model a robot with 6 joints our jacobian is square and a psudoinverse isnt needed
-	while((normalise(vS.pData, 3)) > rotError || normalise(vS.pData + (fsize * 3), 3) > linError){
+	while(((normalise(vS.pData, 3)) > rotError || normalise(vS.pData + (fsize * 3), 3) > linError)&&(iterations<maxIterations)){
 		jacobianSpace(&curJaco, Slist, angleMat.pData);
 		
 		inverseOfMat(&invOfJaco, &curJaco);
-		multiMat(&angleMat,&invOfJaco, &vS);
-
+		multiMat(&angleDeltaMat,&invOfJaco, &vS);
+		addToMatrix(&angleMat, &angleDeltaMat);
 		FKinSpace(&tsb, homeTF, Slist, &angleMat, 6);
-		printMatrix(&tsb, "working forward transform");
+		//printMatrix(&tsb, "working forward transform");
 		//get current forward kinematic space frame transform
 		adjoint(&adjtsb, &tsb);
-		printMatrix(&adjtsb, "adjoint of cur forward kin tf");
+		//printMatrix(&adjtsb, "adjoint of cur forward kin tf");
 
 		fastTFinverse(&workingMat, &tsb);
-		printMatrix(&workingMat, "IK tf inverse");
+		//printMatrix(&workingMat, "IK tf inverse");
 		multiMat(&workingMat, &workingMat, desiredTF);
 		tfMatrixLog(&matLogOfInvTF, &workingMat);
-		printMatrix(&matLogOfInvTF, "log of forward tf inverse");
+		//printMatrix(&matLogOfInvTF, "log of forward tf inverse");
+
 		se3ToVec(vS.pData, &matLogOfInvTF);
-		printMatrix(&vS, "Vector of prev");
+		//printMatrix(&vS, "Vector of prev");
 		multiMat(&vS, &adjtsb, &vS);
 		printMatrix(&vS, "vS");
 
@@ -756,10 +768,10 @@ int main(char* args) {
 	{ testHomeTFdata,4,4 };
 
 	float testDesiredTFdata[] = {
-	-0.0513114288405077, -0.543137390617001, -0.838074526628808,  -84.4691393538694 ,
-	-0.428138270984107, -0.746190008446493,   0.50980201275923,   -157.501989501815,
-	-0.902255373045284, 0.384970448487125, -0.194249827805682,    744.373174371461,
-	0, 0, 0, 1
+	-1,	0,	0,	0,
+	0 ,- 0.544960069177549,	0.838461998543763,	280.283432579323,
+	0,	0.838461998543763,	0.544960069177549, - 150.855779276114,
+	0,	0,	0,	1
 	};
 	t_matrix testDesiredTF =
 	{ testDesiredTFdata,4,4 };
@@ -769,9 +781,9 @@ int main(char* args) {
 		{-1.570796326794897,0,0,0,0,290},
 		{0,0,1.570796326794897,0,- 270,0},
 		{1.570796326794897,0,0,-70,0,0},
-		{1.570796326794897,0,0,0,0,302},
+		{-1.570796326794897,0,0,0,0,302},
 		{1.570796326794897,0,0,0,0,0},
-		{1.570796326794897,0,0,0,0,72},
+		{0,0,0,0,0,72},
 	};
 
 	t_matrix Slist[6] = {
