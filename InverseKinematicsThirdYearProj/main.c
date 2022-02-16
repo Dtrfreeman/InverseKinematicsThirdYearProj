@@ -92,7 +92,7 @@ float dotProduct(float * a,float * b,short int length,short int incOnB){
 
 void multiMat(t_matrix * destMat,t_matrix* matA,t_matrix *matB) {
 	//multiplies matrix a by b and returns the result
-	if (matA->columns != matB->rows) {
+	if (matA->columns != matB->rows) {		
 		//printf("Cannot multiply, incorrect size");
 		errorIdler();
 	}
@@ -667,20 +667,98 @@ void jacobianSpace(t_matrix* jacOut, t_matrix* Slist, float* angleLst) {
 	freeMat(jointPos);
 }
 
+void swapRows(t_matrix* mat,short int row1,short int row2) {
+	float buffer;
+	short int cols = mat->columns;
+	for (short int i = 0; i < cols; i++)
+	{
+		buffer = mat->pData[i + (cols * row1)];
+		mat->pData[i + (cols * row1)]= mat->pData[i + (cols * row2)];
+		mat->pData[i + (cols * row2)]=buffer;
+	}
+
+}
 
 
-void inverseOfMat(t_matrix* matOut, t_matrix* matIn) {
-	//uses gaussian reduction to put all values into the upper triangular
+void swapCols(t_matrix* mat, short int col1, short int col2) {
+	float buffer;
+	short int rows = mat->rows,cols=mat->columns;
+	for (short int i = 0; i < rows; i++)
+	{
+		buffer = mat->pData[col1 + (cols * i)];
+		mat->pData[col1 + (cols * i)] = mat->pData[col2 + (cols * i)];
+		mat->pData[col2 + (cols * i)] = buffer;
+	}
+
+}
+
+#define posN(Y,X,C) X+(Y*C)
+
+void LUPdecomposition(t_matrix * curJaco, int* permutations) {
+
+	short int  yW = 0, xW = 0, rows = curJaco->rows, cols = curJaco->columns;
+
 	
-	t_matrix inverseMat = createMatrix(matIn->rows, matIn->columns);
-	
-	//finds adjoint
-	t_matrix cofactorMat = createMatrix(matIn->rows, matIn->columns);
-	cofactor(&cofactorMat, matIn);
-	transpose(&inverseMat, &cofactorMat);
-	freeMat(cofactorMat);
-	multiMatScalar(matOut, &inverseMat, detNxN(matIn));
-	freeMat(inverseMat);
+	memset(permutations, 0, sizeof(int) * (rows + 1));
+
+	float prevMax, multiFactor;
+	int i, j, k, imax;
+	double maxA, * ptr, absA;
+
+	for (i = 0; i <= rows; i++)
+		permutations[i] = i; //Unit permutation matrix, P[N] initialized with N
+
+	for (i = 0; i < rows; i++) {
+		maxA = 0.0;
+		imax = i;
+
+		for (k = i; k < rows; k++)
+			if ((absA = fabs(curJaco->pData[posN(k, i, cols)])) > maxA) {
+				maxA = absA;
+				imax = k;
+			}
+
+		if (maxA < 0.00001) errorIdler(); //failure, matrix is degenerate
+
+		if (imax != i) {
+			//pivoting P
+			j = permutations[i];
+			permutations[i] = permutations[imax];
+			permutations[imax] = j;
+
+			//pivoting rows of A
+			swapRows(curJaco, i, imax);
+			//counting pivots starting from N (for determinant)
+			permutations[rows]++;
+		}
+
+		for (j = i + 1; j < rows; j++) {
+			curJaco->pData[posN(j, i, cols)] /= curJaco->pData[posN(i, i, cols)];
+
+			for (k = i + 1; k < rows; k++)
+				curJaco->pData[posN(j, k, cols)] -= curJaco->pData[posN(j, i, cols)] * curJaco->pData[posN(i, k, cols)];
+
+		}
+	}
+}
+
+
+void LUPsolveJacobian(t_matrix * deltaAngles, t_matrix * jaco, t_matrix * vS, int* permutations) {
+	short int rows = jaco->rows, cols = jaco->columns;
+	for (int i = 0; i < cols; i++) {
+		deltaAngles->pData[i] = vS->pData[permutations[i]];
+
+		for (int k = 0; k < i; k++)
+			deltaAngles->pData[i] -= jaco->pData[posN(i,k,cols)] * deltaAngles->pData[k];
+	}
+
+	for (int i = rows- 1; i >= 0; i--) {
+		for (int k = i + 1; k < cols; k++)
+			deltaAngles->pData[i] -= jaco->pData[posN(i, k, cols)] * deltaAngles->pData[k];
+
+		deltaAngles->pData[i] /= jaco->pData[posN(i, i, cols)];
+	}
+
 }
 
 void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t_matrix* homeTF,t_matrix * initAngles,float linError,float rotError) {
@@ -718,14 +796,19 @@ void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t
 	short int iterations = 0;
 	t_matrix angleDeltaMat = createMatrix(6, 1);
 #define maxIterations 20
+	int* permutations = malloc(sizeof(int) * 7);
 	//newton raphsen method
 	//conveniently as ive chosen to model a robot with 6 joints our jacobian is square and a psudoinverse isnt needed
 	while(((normalise(vS.pData, 3)) > rotError || normalise(vS.pData + (fsize * 3), 3) > linError)&&(iterations<maxIterations)){
 		jacobianSpace(&curJaco, Slist, angleMat.pData);
-		
-		inverseOfMat(&invOfJaco, &curJaco);
+		printMatrix(&curJaco, "current jacobian");
+		LUPdecomposition(&curJaco, permutations);
+		printMatrix(&curJaco, "jacobian post decomposition");
+		LUPsolveJacobian(&angleDeltaMat, &curJaco,&vS, permutations);
 		multiMat(&angleDeltaMat,&invOfJaco, &vS);
+		printMatrix(&angleDeltaMat, "change in joint angles");
 		addToMatrix(&angleMat, &angleDeltaMat);
+
 		FKinSpace(&tsb, homeTF, Slist, &angleMat, 6);
 		//printMatrix(&tsb, "working forward transform");
 		//get current forward kinematic space frame transform
@@ -742,9 +825,11 @@ void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t
 		//printMatrix(&vS, "Vector of prev");
 		multiMat(&vS, &adjtsb, &vS);
 		printMatrix(&vS, "vS");
-
-		iterations++;
+		iterations++; 
 	} 
+
+	if (iterations == maxIterations) { printf("solution could not be found within %u iterations",maxIterations); }
+	else { printf("solution was found at iteration %u", iterations); }
 
 	memcpy(neededJointAngles, angleMat.pData, fsize * 6);
 	freeMat(curJaco);
