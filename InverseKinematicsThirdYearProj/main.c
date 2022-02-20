@@ -3,7 +3,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include <malloc.h>
-
+#include <gsl/gsl_block.h>
+#include <gsl/gsl_matrix.h>
+#include <gsl/gsl_linalg.h>
 
 typedef struct {
 	float * pData;
@@ -17,6 +19,11 @@ typedef struct {
 
 #define pos3(y,x) x+(y*3)
 #define pos4(y,x) x+(y*4)
+//sets up 2d indexing for 3x3 and 4x4 matrices
+#define jacoR 6
+#define jacoC 6
+//defines size of jacobian matrix
+
 
 void errorIdler(){
 	printf("error occured");
@@ -317,6 +324,7 @@ void vecToSE3(t_matrix* se3Out,float * pVec) {
 		t_matrix skewMat = createMatrix(3, 3);
 		vecToSO3(&skewMat, pVec);
 		insertRotMat(se3Out, &skewMat);
+		freeMat(skewMat);
 }
 
 void se3ToVec(float* pVec, t_matrix* se3In) {
@@ -632,7 +640,7 @@ void jacobianSpace(t_matrix* jacOut, t_matrix* Slist, float* angleLst) {
 	for(short int i=0;i<6;i++){
 		memcpy(&jacTransposed.pData[6 * i], Slist[i].pData, fsize * 6);
 	}
-	////printMatrix(&jacTransposed, "jac transposed");
+	printMatrix(&jacTransposed, "jac transposed");
 	t_matrix Tmat = createMatrix(4, 4);
 	t_matrix workingMatrix = createMatrix(4, 4);
 	t_matrix adjTmat = createMatrix(6, 6);
@@ -640,23 +648,27 @@ void jacobianSpace(t_matrix* jacOut, t_matrix* Slist, float* angleLst) {
 	t_matrix jointPos = createMatrix(4, 4);
 	setToIdentity(&Tmat);
 	for (short int i = 0; i < 5; i++) {
-		//printf("jacobian I=%u", i);
-		//printMatrix(&(Slist[i]), "Slist vals");
+		printf("jacobian I=%u\r\n", i);
+		printMatrix(&(Slist[i]), "Slist vals");
 		multiMatScalar(&workingTwistMat, &(Slist[i]), (angleLst[i]));
-		//printMatrix(&workingTwistMat, "current twist matrix");
+		printMatrix(&workingTwistMat, "current twist matrix");
 		vecToSE3(&workingMatrix, workingTwistMat.pData);
-		//printMatrix(&workingMatrix, "se3 rep of sList[i]*angleList[i]");
+		printMatrix(&workingMatrix, "se3 rep of sList[i]*angleList[i]");
 		tfMatrixExp(&jointPos,&workingMatrix);
-		//printMatrix(&jointPos, "expo output joint position in jacobian");
+		printMatrix(&jointPos, "expo output joint position in jacobian");
 		multiMat(&Tmat, &Tmat, &jointPos);
-		//printMatrix(&Tmat, "T");
+		printMatrix(&Tmat, "T");
 		adjoint(&adjTmat, &Tmat);
+		printMatrix(&adjTmat, "adjoint of T");
 		multiMat(&jacSingleRow, &adjTmat, &Slist[i+1]);
-		memcpy(&(jacTransposed.pData[6*i]), jacSingleRow.pData, 6 * fsize);
+		printMatrix(&jacSingleRow, "adj of T times Slist[i+1]");
+		memcpy(&(jacTransposed.pData[6*(i+1)]), jacSingleRow.pData, 6 * fsize);
+		printMatrix(&jacTransposed,"jacobian transposed");
 		
 	}
-	//printf("finished finding jacobian");
-	//printMatrix(&Tmat, "T");
+	printf("finished finding jacobian");
+	printMatrix(&Tmat, "T");
+	
 	transpose(jacOut, &jacTransposed);
 	freeMat(jacTransposed);
 	freeMat(Tmat);
@@ -693,72 +705,135 @@ void swapCols(t_matrix* mat, short int col1, short int col2) {
 }
 
 #define posN(Y,X,C) X+(Y*C)
+#define inclusionThresh 1E-15
+int gsl_print_matrix(const gsl_matrix* m)
+{
+	int status, n = 0;
 
-void LUPdecomposition(t_matrix * curJaco, int* permutations) {
-
-	short int  yW = 0, xW = 0, rows = curJaco->rows, cols = curJaco->columns;
-
-	
-	memset(permutations, 0, sizeof(int) * (rows + 1));
-
-	float prevMax, multiFactor;
-	int i, j, k, imax;
-	double maxA, * ptr, absA;
-
-	for (i = 0; i <= rows; i++)
-		permutations[i] = i; //Unit permutation matrix, P[N] initialized with N
-
-	for (i = 0; i < rows; i++) {
-		maxA = 0.0;
-		imax = i;
-
-		for (k = i; k < rows; k++)
-			if ((absA = fabs(curJaco->pData[posN(k, i, cols)])) > maxA) {
-				maxA = absA;
-				imax = k;
-			}
-
-		if (maxA < 0.00001) errorIdler(); //failure, matrix is degenerate
-
-		if (imax != i) {
-			//pivoting P
-			j = permutations[i];
-			permutations[i] = permutations[imax];
-			permutations[imax] = j;
-
-			//pivoting rows of A
-			swapRows(curJaco, i, imax);
-			//counting pivots starting from N (for determinant)
-			permutations[rows]++;
+	for (size_t i = 0; i < m->size1; i++) {
+		for (size_t j = 0; j < m->size2; j++) {
+			if ((status = printf( "%g ", gsl_matrix_get(m, i, j))) < 0)
+				return -1;
+			n += status;
 		}
 
-		for (j = i + 1; j < rows; j++) {
-			curJaco->pData[posN(j, i, cols)] /= curJaco->pData[posN(i, i, cols)];
-
-			for (k = i + 1; k < rows; k++)
-				curJaco->pData[posN(j, k, cols)] -= curJaco->pData[posN(j, i, cols)] * curJaco->pData[posN(i, k, cols)];
-
-		}
+		if ((status = printf( "\n")) < 0)
+			return -1;
+		n += status;
 	}
+
+	return n;
 }
 
+void psudoInverseJaco(t_matrix* matOut, t_matrix* matIn) {
+	printMatrix(matIn, "input into psudoInverse");
+	uint8_t hasBeenTransposedFlag = 0;
+	short int rows = matIn->rows, cols = matIn->columns;
 
-void LUPsolveJacobian(t_matrix * deltaAngles, t_matrix * jaco, t_matrix * vS, int* permutations) {
-	short int rows = jaco->rows, cols = jaco->columns;
-	for (int i = 0; i < cols; i++) {
-		deltaAngles->pData[i] = vS->pData[permutations[i]];
+	gsl_matrix* matForSVD = gsl_matrix_alloc(rows, cols);
 
-		for (int k = 0; k < i; k++)
-			deltaAngles->pData[i] -= jaco->pData[posN(i,k,cols)] * deltaAngles->pData[k];
+	if (matIn->columns > matIn->rows) {
+		//needs to be transposed if its wider than it is tall
+		hasBeenTransposedFlag = 1;
+
+		rows = matIn->columns;
+		cols = matIn->rows;
+		for (uint8_t y = 0; y < rows; y++) {
+			for (uint8_t x = 0; x < cols; x++)
+			{
+				gsl_matrix_set(matForSVD,y,x, matIn->pData[posN(x,y,rows)]);
+			}
+			
+		}
+	}
+	else {
+		//not transposed
+		for (uint8_t y = 0; y < rows; y++) {
+			for (uint8_t x = 0; x < cols; x++)
+			{
+				gsl_matrix_set(matForSVD, y, x, matIn->pData[posN(y, x, cols)]);
+			}
+
+		}
+
+	}
+	//printf("mat for svd = \n");
+	//gsl_print_matrix(matForSVD);
+	
+	gsl_matrix* matV = gsl_matrix_alloc(cols, cols);
+	gsl_vector* sVec = gsl_vector_alloc(cols);
+	gsl_vector* work = gsl_vector_alloc(cols);
+	gsl_linalg_SV_decomp(matForSVD, matV, sVec, work);
+	//factorises A into U*S*transpose(V)
+	//matForSVD starts as A but is U on output
+
+	//printf("U (matForSVD) = \n");
+	//gsl_print_matrix(matForSVD);
+	//printf("V = \n");
+	//gsl_print_matrix(matV);
+
+	
+	gsl_matrix * Sigma_pinv = gsl_matrix_alloc(rows,cols);
+	gsl_matrix_set_zero(Sigma_pinv);
+
+	float thresh = inclusionThresh * gsl_vector_max(sVec);
+
+	float tempF;
+
+	for (short int x = 0; x < cols; x++) {
+		if (gsl_vector_get(sVec, x) > thresh) {
+			tempF = 1.0f / gsl_vector_get(sVec, x);
+		}
+		else { tempF = 0.0f; }
+
+		gsl_matrix_set(Sigma_pinv, x, x, tempF);
 	}
 
-	for (int i = rows- 1; i >= 0; i--) {
-		for (int k = i + 1; k < cols; k++)
-			deltaAngles->pData[i] -= jaco->pData[posN(i, k, cols)] * deltaAngles->pData[k];
+	gsl_matrix * svdPadded = gsl_matrix_alloc(rows, rows);
+	gsl_matrix_set_zero(svdPadded);
 
-		deltaAngles->pData[i] /= jaco->pData[posN(i, i, cols)];
+	for (short int y = 0; y < rows; y++)
+	{
+		for (short int x = 0; x < cols; x++)
+		{
+			gsl_matrix_set(svdPadded, y, x, gsl_matrix_get(matForSVD, y, x));
+		}
 	}
+	//printf("svdPadded = \n");
+	//gsl_print_matrix(svdPadded);
 
+	gsl_matrix* gslTempMat = gsl_matrix_alloc(cols, rows);
+	gsl_blas_dgemm(CblasNoTrans, CblasNoTrans, 1.0f, matV, Sigma_pinv, 0.0f, gslTempMat);
+
+	gsl_matrix* A_pinv;
+	if (hasBeenTransposedFlag) {
+		A_pinv = gsl_matrix_alloc(rows, cols);
+		gsl_blas_dgemm(CblasNoTrans, CblasTrans, 1.0f, svdPadded, gslTempMat, 0.0f, A_pinv);
+	}
+	else {
+		A_pinv = gsl_matrix_alloc(cols, rows);
+		gsl_blas_dgemm(CblasNoTrans, CblasTrans, 1.0f, gslTempMat, svdPadded, 0.0f, A_pinv);
+	}
+	//printf("A_pinv = \n");
+	//gsl_print_matrix(A_pinv);
+
+	for (short int y = 0; y < rows; y++)
+	{
+		for (short int x = 0; x < cols; x++)
+		{
+			matOut->pData[posN(y, x, cols)] = gsl_matrix_get(A_pinv, y, x);
+		}
+	}
+	gsl_matrix_free(matForSVD);
+	gsl_matrix_free(matV);
+	gsl_vector_free(sVec);
+	gsl_vector_free(work);
+	gsl_matrix_free(Sigma_pinv);
+	gsl_matrix_free(svdPadded);
+	gsl_matrix_free(gslTempMat);
+	gsl_matrix_free(A_pinv);
+	printMatrix(matOut, "output of psudoInverse");
+	
 }
 
 void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t_matrix* homeTF,t_matrix * initAngles,float linError,float rotError) {
@@ -802,9 +877,7 @@ void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t
 	while(((normalise(vS.pData, 3)) > rotError || normalise(vS.pData + (fsize * 3), 3) > linError)&&(iterations<maxIterations)){
 		jacobianSpace(&curJaco, Slist, angleMat.pData);
 		printMatrix(&curJaco, "current jacobian");
-		LUPdecomposition(&curJaco, permutations);
-		printMatrix(&curJaco, "jacobian post decomposition");
-		LUPsolveJacobian(&angleDeltaMat, &curJaco,&vS, permutations);
+		psudoInverseJaco(&invOfJaco, &curJaco);
 		multiMat(&angleDeltaMat,&invOfJaco, &vS);
 		printMatrix(&angleDeltaMat, "change in joint angles");
 		addToMatrix(&angleMat, &angleDeltaMat);
@@ -827,6 +900,8 @@ void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t
 		printMatrix(&vS, "vS");
 		iterations++; 
 	} 
+
+	printMatrix(&tsb,"final forward kinematic matrix");
 
 	if (iterations == maxIterations) { printf("solution could not be found within %u iterations",maxIterations); }
 	else { printf("solution was found at iteration %u", iterations); }
