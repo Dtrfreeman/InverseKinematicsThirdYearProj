@@ -104,7 +104,7 @@ void multiMat(t_matrix * destMat,t_matrix* matA,t_matrix *matB) {
 		errorIdler();
 	}
 	short int rows= matA->rows, cols= matB->columns;
-	float * result=malloc(rows * cols*fsize);
+	float * result = malloc(rows * cols * sizeof(float));
 	
 	for (short int y = 0; y <rows; y++) {
 		for (short int x = 0; x < cols; x++) {
@@ -203,10 +203,11 @@ void cofactor(t_matrix * matOut,t_matrix* matIn) {
 	checkSize(matOut, matIn->rows, matIn->columns, "mat for adjoint");
 	float * matBuf = malloc(fsize * matIn->rows * matIn->columns);
 	short signed int sign = 1;
+	t_matrix subMat = createMatrix(matIn->rows - 1, matIn->columns - 1);
 	for (short int y = 0; y < matIn->rows; y++) {
 		for (short int x = 0; x < matIn->columns; x++) {
-			
-			matBuf[(matIn->columns*y) +x]=detNxN(matIn, y, x)* (((y + x) % 2)) ? -1 : 1;
+			extractSubMatrix(&subMat, matIn, y, x);
+			matBuf[(matIn->columns*y) +x]=detNxN(&subMat)* (((y + x) % 2)) ? -1 : 1;
 			
 			//add the determinant of all elements in other rows
 		}
@@ -214,6 +215,7 @@ void cofactor(t_matrix * matOut,t_matrix* matIn) {
 
 	memcpy(matOut->pData, matBuf, fsize * matIn->rows * matIn->columns);
 	free(matBuf);
+	free(&subMat);
 }
 
 
@@ -349,6 +351,18 @@ float normalise(float * pVec,short int length) {
 	return(sqrtf(curSum));
 }
 
+float normDiffHomogenousTFrot(t_matrix* matA, t_matrix* matB) {
+	float sum = 0;
+	for (short int y = 0; y <3; y++)
+	{
+		for (short int x = 0; x <3; x++)
+		{
+			sum+=pow(matA->pData[pos4(y, x)] - matB->pData[pos4(y, x)], 2);
+		}
+	}
+	return(sqrt(sum));
+}
+
 float axisAng3(float * rotAxis,float* pVec) {
 	//takes rotation 3 element vector and returns unit rot axis and rotation angle
 	float theta = normalise(pVec,3);
@@ -364,7 +378,7 @@ float axisAng3(float * rotAxis,float* pVec) {
 void roundNearZeroToZero(t_matrix* pMat) {
 	for (short int y = 0; y < pMat->rows; y++) {
 		for (short int x = 0; x < pMat->columns; x++) {
-			if ((abs(pMat->pData)) < threshold) { pMat->pData = 0; }
+			if (((abs(pMat->pData))) < threshold) { pMat->pData = 0; }
 		}
 	}
 
@@ -844,7 +858,7 @@ void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t
 	t_matrix tsb = createMatrix(4, 4);
 	//printMatrix(initAngles, "copied initial angles");
 	/*
-	* Vs=Adjoint(forwardKin(homeTF))xse3of(matLog(Inv(forwardKin(homeTF))*desiredPos)
+	* Vs=Adjoint(forwardKin(homeTF)) x se3of(matLog(Inv(forwardKin(homeTF))*desiredPos)
 	*/
 	t_matrix vS=createMatrix(6,1);
 	t_matrix adjtsb = createMatrix(6, 6);
@@ -874,7 +888,7 @@ void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t
 	int* permutations = malloc(sizeof(int) * 7);
 	//newton raphsen method
 	//conveniently as ive chosen to model a robot with 6 joints our jacobian is square and a psudoinverse isnt needed
-	while(((normalise(vS.pData, 3)) > rotError || normalise(vS.pData + (fsize * 3), 3) > linError)&&(iterations<maxIterations)){
+	while((((normalise(vS.pData, 3)) > rotError) || (normalise(&(vS.pData[3]), 3) > linError)) && (iterations<maxIterations)) {
 		jacobianSpace(&curJaco, Slist, angleMat.pData);
 		printMatrix(&curJaco, "current jacobian");
 		psudoInverseJaco(&invOfJaco, &curJaco);
@@ -883,7 +897,7 @@ void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t
 		addToMatrix(&angleMat, &angleDeltaMat);
 
 		FKinSpace(&tsb, homeTF, Slist, &angleMat, 6);
-		//printMatrix(&tsb, "working forward transform");
+		printMatrix(&tsb, "working forward transform");
 		//get current forward kinematic space frame transform
 		adjoint(&adjtsb, &tsb);
 		//printMatrix(&adjtsb, "adjoint of cur forward kin tf");
@@ -903,8 +917,14 @@ void IKinSpace(float * neededJointAngles,t_matrix* desiredTF,t_matrix * Slist, t
 
 	printMatrix(&tsb,"final forward kinematic matrix");
 
-	if (iterations == maxIterations) { printf("solution could not be found within %u iterations",maxIterations); }
-	else { printf("solution was found at iteration %u", iterations); }
+	if (iterations == maxIterations) { 
+		printf("solution could not be found within %u iterations",maxIterations); }
+	else { 	
+		printf("solution was found at iteration %u\r\n", iterations); 
+		multiMatScalar(&tsb, &tsb, -1.0);
+		addToMatrix(&tsb, desiredTF);
+		printMatrix(&tsb,"forward transform error matrix");
+	}
 
 	memcpy(neededJointAngles, angleMat.pData, fsize * 6);
 	freeMat(curJaco);
@@ -928,10 +948,10 @@ int main(char* args) {
 	{ testHomeTFdata,4,4 };
 
 	float testDesiredTFdata[] = {
-	-1,	0,	0,	0,
-	0 ,- 0.544960069177549,	0.838461998543763,	280.283432579323,
-	0,	0.838461998543763,	0.544960069177549, - 150.855779276114,
-	0,	0,	0,	1
+	0.0125600000000000,0.811060000000000,- 0.584830000000000,- 179.686170000000,
+- 0.388980000000000,	0.542770000000000,	0.744380000000000,	400,
+0.921160000000000,	0.218140000000000,	0.322310000000000,	375.343850000000,
+0,	0,	0,	1
 	};
 	t_matrix testDesiredTF =
 	{ testDesiredTFdata,4,4 };
@@ -955,12 +975,12 @@ int main(char* args) {
 		{SlistData[5],6,1}
 	};
 	t_matrix initAngles = createMatrix(6, 1);
-	initAngles.pData[0] = 0.0f;
-	initAngles.pData[1] = 0.0f;
-	initAngles.pData[2] = 0.0f;
-	initAngles.pData[3] = 0.0f;
-	initAngles.pData[4] = 0.0f;
-	initAngles.pData[5] = 0.0f;
+	initAngles.pData[0] = 1.81267624967643;
+	initAngles.pData[1] = 1.55812741662800;
+	initAngles.pData[2] = -1.52091948780048;
+	initAngles.pData[3] = 2.30872895908779;
+	initAngles.pData[4] = 0.554425086996533;
+	initAngles.pData[5] = -5.61939843953905;
 
 	t_matrix outputJointAngles = createMatrix(6, 1);
 	IKinSpace(outputJointAngles.pData, &testDesiredTF, Slist, &testHomeTF, &initAngles, 0.01, 0.01);
@@ -968,12 +988,12 @@ int main(char* args) {
 
 /*
 * expecting something like
-		    1.44719272943565
-        -0.940366183268735
-        -0.330350386059305
-          1.11185544064095
-          1.63741163518943
-          6.41292082523055
+	1.81267624967643
+1.55812741662800
+-1.52091948780048
+2.30872895908779
+0.554425086996533
+-5.61939843953905
 */
 	//printMatrix(&testMatB, "B");
 	printMatrix(&outputJointAngles, "Result");
